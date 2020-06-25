@@ -1,0 +1,660 @@
+---
+  title: "Theoretical example calculations"
+author: "Caitie"
+date: "9/19/2019"
+output: html_document
+---
+  
+  ```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(NLMR)
+library(landscapetools)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(fitdistrplus)
+library(logspline)
+library(MASS)
+library(raster)
+library(here)
+library(purrr)
+library(ggplot2)
+library(broom)
+devtools::install_github("johannesbjork/LaCroixColoR")
+library(LaCroixColoR)
+library(gridExtra)
+library(tidyr)
+library(data.table)
+library(readr)
+
+```
+
+
+# Load pressure data
+
+```{r}
+source(here("scripts",'theme_nlm_nis.R'))
+
+# Simplified version of the Poore data modified to be per kg liveweight
+
+
+df2<-read_csv(here("data", "Poore_Nemecek_All_Stressors_revised.csv"), na = "-") %>% 
+  filter(!is.na(value) == T) %>% 
+  mutate(`LUC Burn` = replace_na(`LUC Burn`, 0),
+         `LUC C Stock` = replace_na(`LUC C Stock`, 0),
+         value = Farm + `LUC C Stock` + `LUC Burn`) %>% 
+  dplyr::select(Product, stressor, value) %>% 
+  rename(Category = Product) %>% 
+  mutate(Category = ifelse(Category == "Maize", "Maize (Meal)",
+                           ifelse(Category == "Beef", "Bovine Meat (Beef Herd)", "Fish (farmed)")),
+         stressor = ifelse(stressor == "Freshwatr Withdr", "Freshwtr_Withdr", 
+                    ifelse(stressor == "GHG_emissions", "GHG_emission",as.character(stressor))))
+  
+  
+stressors <- unique(df2$stressor)
+prod_types<-c("Maize (Meal)", "Bovine Meat (Beef Herd)", "Fish (farmed)")
+
+
+# There is no wild fisheries here
+# The new dataset does not have scientific name so we just use all salmon
+
+sub_df<-df2 %>% 
+  filter((Category %in% prod_types))
+
+```
+
+
+# Fisheries data
+
+This data is from Hilborn et al. 2018 The environmental cost of animal source foods
+
+"In all cases we calculated impacts for a standardized serving of 40 g of protein."
+
+A herring edible/filet has 18% protein. So we can assume 1 kg herring = 0.18 kg protein or 180 g protein
+
+https://esajournals.onlinelibrary.wiley.com/action/downloadSupplement?doi=10.1002%2Ffee.1822&file=fee1822-sup-0013-WebTableS3.pdf
+
+```{r}
+
+fish_df<-fread(here("data/Hilborn_LCA_data.csv")) %>% 
+  filter(Category == "Fish",
+         Wildorfarmed == "Wild",
+         Product == "Smallpelagic") %>% 
+  dplyr::select(Product, GHG_kg_CO2_eq_mean) %>% 
+  rename(Category = Product, ghg_40g_protein = GHG_kg_CO2_eq_mean) %>% 
+  mutate(stressor = "GHG_emission",
+         ghg_40g_protein = as.numeric(ghg_40g_protein)) %>% 
+  dplyr::select(Category, stressor, ghg_40g_protein) %>% 
+  mutate(protein_conv_g = 180,
+         ghg_g_protein = ghg_40g_protein/40) %>% 
+  rename(value = ghg_g_protein) %>% 
+  dplyr::select(Category,stressor,value)
+```
+
+
+# Join data together
+
+```{r}
+sub_df<-rbind(sub_df, fish_df)
+```
+
+
+## Investigate distribution of stressors 
+
+```{r}
+sub_df %>% 
+  ggplot(aes(value)) + 
+  geom_histogram() + 
+  facet_grid(Category ~ stressor, scales = "free")
+
+```
+
+We use land use, ghg emissions and freshwater withdrawal to demonstrate our approach
+
+
+```{r}
+
+# As of now I do not remove the highest value
+# I also remove all NAs whereas Nis changed NAs to 0
+
+df_new <- sub_df %>% 
+  filter(!is.na(value) == T) %>% 
+  filter(!stressor %in% c("Water", "Acid_Pot", "Eutr")) %>% 
+  mutate(value = value + 0.00001) %>% 
+  group_by(Category, stressor) %>% 
+  summarise(vec = value %>% list) %>% 
+  mutate(mod = map(vec, ~fitdistrplus::fitdist(.x,'lnorm'))) %>% 
+  mutate(meanlog = map(mod, ("estimate")) %>% map_dbl("meanlog")) %>% 
+  mutate(sdlog = map(mod, ("estimate")) %>% map_dbl("sdlog"))
+
+```
+
+
+## Plot a simulated map of corn data
+```{r}
+set.seed(1234) # For reproducibility
+fbm2 <- NLMR::nlm_fbm(100, 100, fract_dim = 1.1, resolution = 200) # Fractal dimension changes the landscape
+
+plot(fbm2)
+
+x <- util_classify(fbm2, weighting = c(0.1, 0.1, 0.3, 0.3, 0.03, 0.1), level_names = c("Corn","Beef", "Forest", "Water","Salmon aquaculture", "Small pelagic fishery"))
+plot(x)
+
+ratio <- nrow(x) / ncol(x)
+legend_labels <-  x@data@attributes[[1]][, 2]
+
+xyz  <- raster::as.data.frame(x, xy = TRUE)
+
+p1 <-  ggplot(xyz) +
+  geom_tile(aes(x, y, fill = factor(xyz[, 3]))) + theme_bw()+
+  theme_nlm_nis(legend_labels = legend_labels, ratio = ratio)+
+  scale_fill_manual(values = c('darkred','yellow', "darkgreen","darkorange",'lightblue', "darkblue"))+ 
+  guides(fill=guide_legend(title="Landscape"))
+p1    
+
+```
+
+# Determine stressor values for each cell in each food production category
+```{r}
+nrow_xyz<-table(xyz$layer_Categories) %>% 
+  as.data.frame(row.names = NULL) %>% 
+  mutate(Var1 = ifelse(Var1 == "Beef", "Bovine Meat (Beef Herd)", 
+                       ifelse(Var1 == "Salmon aquaculture", "Fish (farmed)", 
+                              ifelse(Var1 == "Corn","Maize (Meal)",
+                                     ifelse(Var1 == "Forest", "Forest", 
+                                            ifelse( Var1 == "Water", "Water", "Smallpelagic"))))))
+
+df_sample<-df_new %>% 
+  left_join(nrow_xyz, by = c("Category" = "Var1")) %>% 
+  group_by(Category, stressor) %>% 
+  mutate(samples = rlnorm(Freq, meanlog = meanlog, sdlog = sdlog) %>% list) %>% 
+  unnest(samples) %>% 
+  mutate(Cat = ifelse(Category == "Bovine Meat (Beef Herd)", "Beef",
+                      ifelse(Category == "Fish (farmed)", "Salmon aquaculture",
+                             ifelse(Category == "Maize (Meal)", "Corn",
+                                    ifelse(Category == "Smallpelagic", "Small pelagic fishery", NA))))) %>% 
+  as.data.frame()
+```
+
+
+
+## Check sampled numbers to see how they compare to real data
+
+
+```{r}
+df_sample %>% 
+  ggplot(aes(samples)) + 
+  geom_histogram() + 
+  facet_grid(Category ~ stressor, scales = "free")
+```
+
+# Yield/Production data
+
+Yield needs to be in kg liveweight to match the pressure values
+
+```{r}
+# Maize 9.97 tonnes dry weight/ha
+# Beef 12.185 kg protein/ha = 70.3 kg liveweight/ha
+# Need to figure out salmon and pelagic fishery
+
+yield<-data.frame(Category = c("Maize (Meal)", "Bovine Meat (Beef Herd)", "Fish (farmed)", "Smallpelagic"), High_kg_ha = c(12000, 50, 20000, 8000)) %>% 
+  mutate(Low_kg_ha = High_kg_ha/3)%>% 
+  left_join(nrow_xyz, by = c("Category" = "Var1"))
+
+yield$SD <- (yield$High_kg_ha-yield$Low_kg_ha)/3.92 # Assume the highs and lows are 95 and 5th quantiles 
+yield$ymean <- rowMeans(cbind(yield$Low_kg_ha,yield$High_kg_ha))
+# 
+
+```
+
+
+```{r}
+yield
+
+yield<- yield %>% 
+  group_by(Category) %>% 
+  mutate(yield_samples = rnorm(Freq, mean = ymean, sd = SD) %>% list) %>% 
+  unnest(yield_samples) #%>% 
+
+# Assign the minimum value to negative values
+idx <- which(yield$yield_samples < 0)
+
+yield$yield_samples[idx] <- yield$Low_kg_ha[idx]
+
+# Assume the mean and that the edges are the 95% confidence intervals 
+
+
+```
+
+# Plot production
+
+```{r}
+yield_plot<-xyz 
+
+yield_plot$prod[yield_plot$layer_Categories == "Beef"]<-yield$yield_samples[yield$Category == "Bovine Meat (Beef Herd)"]
+yield_plot$prod[yield_plot$layer_Categories == "Corn"]<-yield$yield_samples[yield$Category == "Maize (Meal)"]
+yield_plot$prod[yield_plot$layer_Categories == "Salmon aquaculture"]<-yield$yield_samples[yield$Category == "Fish (farmed)"]
+yield_plot$prod[yield_plot$layer_Categories == "Small pelagic fishery"]<-yield$yield_samples[yield$Category == "Smallpelagic"]
+```
+
+
+```{r}
+plot_prod <-  yield_plot %>% 
+  ggplot() + # Need to make another color scale for the stressors 
+  geom_raster(aes(x, y, fill = prod)) +
+  theme_nlm(legend_labels = legend_labels, ratio = ratio)+
+  geom_tile(data = yield_plot[yield_plot$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+  geom_tile(data = yield_plot[yield_plot$layer_Categories == 'Forest',],aes(x, y), fill = 'grey')
+
+
+plot_prod
+```
+
+
+```{r}
+write.csv(yield, here("outputs", "Theoretical_sampled_yields.csv"))
+```
+
+
+# GHG emissions
+
+All pressure data is in kg of liveweight (corrections made to Poore and Nemecek database from personal communication with Dr. Poore), thus we multiply the yield in each cell by the pressure value to get the pressure value in each plot.
+```{r}
+# Now make the same figure, but replace the corn values with sampled values from the distribution 
+# 
+
+ghg<-xyz 
+
+sub<-df_sample %>% 
+      filter(stressor == "GHG_emission") %>% 
+      dplyr::select(Cat,samples)
+
+    ghg$samples[ghg$layer_Categories == 'Corn'] <- sub$samples[sub$Cat == "Corn"]
+    ghg$samples[ghg$layer_Categories == 'Beef'] <- sub$samples[sub$Cat == "Beef"]
+    ghg$samples[ghg$layer_Categories == 'Salmon aquaculture'] <- sub$samples[sub$Cat == "Salmon aquaculture"]
+    ghg$samples[ghg$layer_Categories == 'Small pelagic fishery'] <- sub$samples[sub$Cat == "Small pelagic fishery"]
+    
+    ghg$yield[ghg$layer_Categories == 'Corn'] <- yield$yield_samples[yield$Category == "Maize (Meal)"]
+    ghg$yield[ghg$layer_Categories == 'Beef'] <- yield$yield_samples[yield$Category == "Bovine Meat (Beef Herd)"]
+    ghg$yield[ghg$layer_Categories == 'Salmon aquaculture'] <- yield$yield_samples[yield$Category == "Fish (farmed)"]
+    ghg$yield[ghg$layer_Categories == 'Small pelagic fishery'] <- yield$yield_samples[yield$Category == "Smallpelagic"]
+    
+    ghg$final_stressor <-ghg$samples * ghg$yield
+    ghg$stressor<- "GHG"
+
+```
+
+
+# Land Use
+
+Cattle, maize and salmon aquaculture will get a value of 1 as they are more or less "stationary" and we assume are industrial scale, completely disturbing the habitat in the area they occupy. Fisheries on the other hand are more transient and thus my have a lower disturbance. For small pelagic fishery we assume a disturbance of 1/3 of that from indsturial, stationary production.
+
+```{r}
+lu<-xyz
+
+    lu$samples[lu$layer_Categories == 'Corn'] <- 1
+    lu$samples[lu$layer_Categories == 'Beef'] <- 1
+    lu$samples[lu$layer_Categories == 'Salmon aquaculture'] <- 1
+    lu$samples[lu$layer_Categories == 'Small pelagic fishery'] <- 1/3
+```
+
+
+# Freshwater Withdrawal
+
+```{r}
+fw<-xyz
+
+    sub_fw<-df_sample %>% 
+      filter(stressor == "Freshwtr_Withdr") %>% 
+      dplyr::select(Cat,samples) %>% 
+      group_by(Cat)
+      
+      yield<-yield %>% 
+        group_by(Category)
+    
+    fw$samples[fw$layer_Categories == 'Corn'] <- sub_fw$samples[sub_fw$Cat == "Corn"]
+    fw$samples[fw$layer_Categories == 'Beef'] <- sub_fw$samples[sub_fw$Cat == "Beef"]
+    fw$samples[fw$layer_Categories == 'Salmon aquaculture'] <- sub_fw$samples[sub_fw$Cat == "Salmon aquaculture"]
+    
+    fw$yield[fw$layer_Categories == 'Corn'] <- yield$yield_samples[yield$Category == "Maize (Meal)"]
+    fw$yield[fw$layer_Categories == 'Beef'] <- yield$yield_samples[yield$Category == "Bovine Meat (Beef Herd)"]
+    fw$yield[fw$layer_Categories == 'Salmon aquaculture'] <- yield$yield_samples[yield$Category == "Fish (farmed)"]
+    fw$yield[fw$layer_Categories == 'Small pelagic fishery'] <- yield$yield_samples[yield$Category == "Smallpelagic"]
+    
+    fw$final_stressor <-fw$samples * fw$yield
+    
+    fw$stressor<-"FW"
+
+    
+```
+
+
+
+# Cumulative Impact
+
+Collate data for mapping - we need the separated feed/farm values for salmon and beef and the raw values for corn and fish. We can just use the on-farm values.
+
+```{r}
+lu<-lu %>% 
+  mutate(yield = NA,
+         stressor = "Land_Use",
+         final_stressor = samples)
+
+
+map_stress_data<-rbind(ghg, fw, lu)
+```
+
+
+## Rescale stressors
+```{r}
+# We use the 99th percentile to rescale, but this should be based on sample size
+
+df_rescale <- map_stress_data %>%
+  group_by(stressor) %>% 
+  mutate(quant = quantile(final_stressor, c(0.9999), na.rm = T),
+         rescale = final_stressor/quant,
+         rescale = ifelse(rescale >1,1, rescale))
+```
+
+```{r}
+write.csv(map_stress_data, here("outputs","All_on_farm_stressors.csv"))
+write.csv(df_rescale, here("outputs", "All_on_farm_stressors_rescaled.csv"))
+```
+
+
+# Cumulate stressors
+
+# Add rescaled stressors together
+```{r}
+cum_stress<-df_rescale %>% 
+  group_by(x,y, layer_Categories) %>% 
+  summarise(cum_stress = sum(rescale, na.rm = T))
+
+```
+
+```{r}
+write.csv(cum_stress, here("outputs","Cumulative_stressors.csv"))
+```
+
+
+# On farm vs. off farm emission
+The current stressors are only "on- farm stressors" now we calculate the stressors from feed. And just crop/animal pressure accordingly to map cumulative cost.
+
+```{r}
+
+total_prod<-yield %>% 
+  group_by(Category) %>% 
+  summarise(total_prod = sum(yield_samples, na.rm = T))
+
+prop_feed_actual = c(0.43, 0.22, 0.3, NA, NA) 
+prop_feed_ex = c(0.43, 0.7, 0.3, NA, NA)  # orginal prop_feed_ex = c(0.43, 0.7, 0.3, NA, NA), we increase the corn/fish for salmon so the example is "self contained". We assume the remaining feed for cows is pasture from within the landscape.
+
+FCR = c(19,1.1,1.1, NA, NA)
+
+off_farm<-data.frame(Category = c("Bovine Meat (Beef Herd)", "Fish (farmed)", "Fish (farmed)", "Maize (Meal)", "Smallpelagic"), 
+                     crop = c("Maize", "Maize", "fish meal", NA, NA), 
+                     prop_feed_actual = prop_feed_actual, 
+                     prop_feed_ex = prop_feed_ex, 
+                     FCR = FCR, 
+                     total_prod_kg = c(total_prod$total_prod[[1]], total_prod$total_prod[[2]], total_prod$total_prod[[2]],total_prod$total_prod[[3]], 	total_prod$total_prod[[4]])) %>% 
+  mutate(feed_needed_kg = total_prod_kg * FCR,
+         crop_needed_kg = feed_needed_kg * prop_feed_ex,
+         perc_crop_needed = ifelse(crop == "Maize", crop_needed_kg/total_prod$total_prod[[3]],
+                                   ifelse(crop == "fish meal", crop_needed_kg/total_prod$total_prod[[4]], NA)))
+# We assume fish oil can be obtained from the same fish used for the meal
+```
+
+
+
+## GHG off-farm beef and salmon
+
+Calculate values for beef on and off farm pressures (i.e. pressure for beef and pressure from feed)
+
+```{r}
+
+corn_ghg<-ghg %>% 
+  filter(layer_Categories == "Corn")
+
+total_corn_ghg<-sum(corn_ghg$final_stressor)
+
+corn_ghg_beef<-total_corn_ghg * off_farm$perc_crop_needed[[1]]
+
+
+beef_ghg<-ghg %>% 
+  filter(layer_Categories == "Beef")
+
+farm_beef_ghg<-sum(beef_ghg$final_stressor)
+
+beef_total_ghg<-farm_beef_ghg + corn_ghg_beef 
+
+perc_beef_ghg_on_farm<-farm_beef_ghg/beef_total_ghg
+perc_beef_ghg_increase<-beef_total_ghg/farm_beef_ghg
+perc_beef_ghg_feed<-corn_ghg_beef/beef_total_ghg
+perc_beef_ghg_feed_farm<-corn_ghg_beef/farm_beef_ghg
+```
+
+Calculate farmed fish on vs. off farm pressure
+
+```{r}
+
+#Fish feed
+
+fish_ghg<-ghg %>% 
+  filter(layer_Categories == "Small pelagic fishery")
+
+total_fish_ghg<-sum(fish_ghg$final_stressor)
+
+fish_ghg_salmon<-total_fish_ghg * off_farm$perc_crop_needed[[3]]
+
+salmon_ghg<-ghg %>% 
+  filter(layer_Categories == "Salmon aquaculture")
+
+# Corn
+corn_ghg_salmon<-total_corn_ghg * off_farm$perc_crop_needed[[2]]
+
+farm_salmon_ghg<-sum(salmon_ghg$final_stressor)
+
+salmon_total_ghg<-farm_salmon_ghg + corn_ghg_salmon + fish_ghg_salmon
+
+perc_salmon_ghg_on_farm<-farm_salmon_ghg/salmon_total_ghg
+perc_salmon_ghg_increase<-salmon_total_ghg/farm_salmon_ghg
+perc_salmon_ghg_feed_corn<-corn_ghg_salmon/salmon_total_ghg
+perc_salmon_ghg_feed_fish<-fish_ghg_salmon/salmon_total_ghg
+perc_salmon_ghg_feed_farm<-(corn_ghg_salmon + fish_ghg_salmon)/farm_salmon_ghg
+
+```
+
+
+```{r}
+ghg_on_off<- ghg %>% 
+  rename(farm_stress = final_stressor) %>% 
+  mutate(agg_stress = ifelse(layer_Categories == "Beef", farm_stress * perc_beef_ghg_increase,
+                      ifelse(layer_Categories == "Salmon aquaculture", farm_stress * perc_salmon_ghg_increase,
+                      ifelse(layer_Categories == "Corn", farm_stress*(1-(off_farm$perc_crop_needed[[1]]+off_farm$perc_crop_needed[[2]])), 
+                      ifelse(layer_Categories == "Small pelagic fishery", farm_stress*(1-off_farm$perc_crop_needed[[3]]),farm_stress)))),
+         beef_disagg_stress = ifelse(layer_Categories == "Beef", farm_stress ,
+                      ifelse(layer_Categories == "Corn", farm_stress - (farm_stress*(1-(off_farm$perc_crop_needed[[1]]))),NA)),
+         salmon_disagg_stress = ifelse(layer_Categories == "Salmon aquaculture", farm_stress,
+                      ifelse(layer_Categories == "Corn", farm_stress - (farm_stress*(1-(off_farm$perc_crop_needed[[2]]))), 
+                      ifelse(layer_Categories == "Small pelagic fishery", farm_stress - (farm_stress*(1-off_farm$perc_crop_needed[[3]])),farm_stress))))
+
+round(sum(ghg_on_off$farm_stress, na.rm = T),0) == round(sum(ghg_on_off$agg_stress,na.rm = T),0)
+
+
+```
+
+```{r}
+write.csv(ghg_on_off, here("outputs",'Beef_salmon_GHG_emissions_footprint.csv'))
+
+```
+
+
+# Land use on/off farm
+
+
+```{r}
+corn_lu<-lu %>% 
+  filter(layer_Categories == "Corn")
+
+total_corn_lu<-sum(corn_lu$samples)
+
+corn_lu_beef<-total_corn_lu * off_farm$perc_crop_needed[[1]]
+
+
+beef_lu<-lu %>% 
+  filter(layer_Categories == "Beef")
+
+farm_beef_lu<-sum(beef_lu$samples)
+
+beef_total_lu<-farm_beef_lu + corn_lu_beef
+
+perc_beef_lu_on_farm<-farm_beef_lu/beef_total_lu
+perc_beef_lu_increase<-beef_total_lu/farm_beef_lu
+perc_beef_lu_feed_corn<-corn_lu_beef/beef_total_lu
+perc_beef_lu_feed_farm<-corn_lu_beef/farm_beef_lu
+
+
+```
+
+
+```{r}
+
+corn_lu_salmon<-total_corn_lu * off_farm$perc_crop_needed[[2]]
+
+fish_lu<-lu %>% 
+  filter(layer_Categories == "Small pelagic fishery")
+
+total_fish_lu<-sum(fish_lu$samples)
+
+fish_lu_salmon<-total_fish_lu * off_farm$perc_crop_needed[[3]]
+
+
+salmon_lu<-lu %>% 
+  filter(layer_Categories == "Salmon aquaculture")
+
+# Corn
+farm_salmon_lu<-sum(salmon_lu$samples)
+salmon_total_lu<-farm_salmon_lu + fish_lu_salmon + corn_lu_salmon
+
+perc_salmon_lu_on_farm<-farm_salmon_lu/salmon_total_lu
+perc_salmon_lu_increase<-salmon_total_lu/farm_salmon_lu
+perc_salmon_lu_feed_corn<-corn_lu_salmon/salmon_total_lu
+perc_salmon_lu_feed_fish<-fish_lu_salmon/salmon_total_lu
+perc_salmon_lu_feed_farm<-(corn_lu_salmon+ fish_lu_salmon)/farm_salmon_lu
+
+```
+
+
+
+```{r}
+lu_on_off<- lu %>% 
+  rename(farm_stress = final_stressor) %>% 
+  mutate(agg_stress = ifelse(layer_Categories == "Beef", farm_stress * perc_beef_lu_increase,
+                      ifelse(layer_Categories == "Salmon aquaculture", farm_stress * perc_salmon_lu_increase,
+                      ifelse(layer_Categories == "Corn", farm_stress*(1-(off_farm$perc_crop_needed[[1]]+off_farm$perc_crop_needed[[2]])), 
+                      ifelse(layer_Categories == "Small pelagic fishery", farm_stress*(1-off_farm$perc_crop_needed[[3]]),farm_stress)))))
+
+round(sum(lu_on_off$farm_stress, na.rm = T),0) == round(sum(lu_on_off$agg_stress,na.rm = T),0)
+```
+
+
+# Freshwater on/off farm
+
+```{r}
+
+corn_fw<-fw %>% 
+  filter(layer_Categories == "Corn")
+
+total_corn_fw <- sum(corn_fw$final_stressor)
+
+corn_fw_beef<-total_corn_fw * off_farm$perc_crop_needed[[1]]
+
+beef_fw<-fw %>% 
+  filter(layer_Categories == "Beef")
+
+farm_beef_fw<-sum(beef_fw$final_stressor)
+
+total_beef_fw<-farm_beef_fw + corn_fw_beef
+
+perc_beef_fw_on_farm<-farm_beef_fw/total_beef_fw
+perc_beef_fw_increase<-total_beef_fw/farm_beef_fw
+perc_beef_fw_feed<-corn_fw_beef/total_beef_fw
+perc_beef_fw_feed_farm<-corn_fw_beef/farm_beef_fw #Multiply the beef farm cell values by this to get the feed values, then sum to get the total pressure
+
+```
+
+
+```{r}
+
+corn_fw_salmon<-total_corn_fw * off_farm$perc_crop_needed[[2]]
+
+fish_fw<-fw %>% 
+  filter(layer_Categories == "Small pelagic fishery")
+
+total_fish_fw<-sum(fish_fw$final_stressor,na.rm = T)
+
+fish_fw_salmon<-total_fish_fw * off_farm$perc_crop_needed[[3]]
+
+
+salmon_fw<-fw %>% 
+  filter(layer_Categories == "Salmon aquaculture")
+
+# Corn
+farm_salmon_fw<-sum(salmon_fw$final_stressor)
+
+total_salmon_fw<-farm_salmon_fw + (corn_fw_salmon + fish_fw_salmon)
+
+perc_salmon_fw_on_farm<-farm_salmon_fw/total_salmon_fw
+perc_salmon_fw_increase<-total_salmon_fw/farm_salmon_fw
+perc_salmon_fw_feed_corn<-corn_fw_salmon/total_salmon_fw
+perc_salmon_fw_feed_fish<-fish_fw_salmon/total_salmon_fw
+perc_salmon_fw_feed_farm<-(fish_fw_salmon + corn_fw_salmon)/farm_salmon_fw
+
+```
+
+```{r}
+fw_on_off<- fw %>% 
+  rename(farm_stress = final_stressor) %>% 
+  mutate(agg_stress = ifelse(layer_Categories == "Beef", farm_stress * perc_beef_fw_increase,
+                      ifelse(layer_Categories == "Salmon aquaculture", farm_stress * perc_salmon_fw_increase,
+                      ifelse(layer_Categories == "Corn", farm_stress*(1-(off_farm$perc_crop_needed[[1]]+off_farm$perc_crop_needed[[2]])), 
+                      ifelse(layer_Categories == "Small pelagic fishery", farm_stress*(1-off_farm$perc_crop_needed[[3]]),farm_stress)))))
+
+round(sum(fw_on_off$farm_stress, na.rm = T),0) == round(sum(fw_on_off$agg_stress,na.rm = T),0)
+```
+
+# Total on-farm and feed stressor for cumulative cost mapping
+
+```{r}
+cost_dat<-ghg_on_off %>% 
+  dplyr::select(-beef_disagg_stress, -salmon_disagg_stress) %>% 
+  rbind(., lu_on_off, fw_on_off) %>% 
+  left_join(.,  yield_plot, by = c("layer_Categories", "x", "y")) %>% 
+            mutate(cost= agg_stress/prod)
+
+cost_dat_rescale <- cost_dat %>%
+  group_by(stressor) %>% 
+  mutate(quant = quantile(cost, c(0.9999), na.rm = T),
+         rescale = cost/quant,
+         rescale = ifelse(rescale >1,1, rescale))
+```
+
+
+# Calculate stressor cost
+
+```{r}
+cum_cost<-cost_dat_rescale %>% 
+  group_by(x,y, layer_Categories) %>% 
+  summarise(cum_cost = sum(rescale, na.rm = T))
+
+```
+
+
+```{r}
+write.csv(cost_dat, here("outputs", "Aggregated_pressures.csv"))
+write.csv(cum_cost, here("outputs", "Cumulative_cost.csv"))
+
+```

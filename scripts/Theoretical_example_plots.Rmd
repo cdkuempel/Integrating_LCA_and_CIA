@@ -1,0 +1,1079 @@
+---
+title: "Theoretical example plots"
+author: "Caitie"
+date: "10/24/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#devtools::install_github("johannesbjork/LaCroixColoR", force=TRUE) #newest lacroix
+
+library(tidyr)
+library(ggplot2)
+library(ggsci)
+library(NLMR)
+library(here)
+library(landscapetools)
+library(dplyr)
+library(reshape2)
+library(fitdistrplus)
+library(logspline)
+library(MASS)
+library(raster)
+library(here)
+library(purrr)
+library(ggplot2)
+library(ggpubr)
+library(broom)
+library(LaCroixColoR)
+library(gridExtra)
+library(tidyr)
+library(data.table)
+library(viridis)
+library(png) #reading in the png images
+library(grid) #for rasterising png
+
+source(here("scripts",'theme_nlm_nis.R'))
+
+options(scipen=10000)
+
+```
+
+## Figure 1
+
+Figure 1 is a flow diagram that was heavily modified in powerpoint and thus not include here.
+
+## Figure 2 
+
+Figure 2 plots the individual pressures for each food production type. These plots were saved with a transparent background and overlaid in powerpoint to achieve the final Figure 2 in the manuscript.
+
+## Plot a simulated map of corn data
+
+```{r}
+set.seed(1234) # For reproducibility
+
+fbm2 <- NLMR::nlm_fbm(100, 100, fract_dim = 1.1, resolution = 200) # Fractal dimension changes the landscape
+
+plot(fbm2)
+
+x <- util_classify(fbm2, weighting = c(0.1, 0.1, 0.3, 0.3, 0.03, 0.1), level_names = c("Maize","Beef", "Forest", "Water","Salmon aquaculture", "Small pelagic fishery"))
+plot(x)
+
+ratio <- nrow(x) / ncol(x)
+legend_labels <-  x@data@attributes[[1]][, 2]
+
+xyz  <- raster::as.data.frame(x, xy = TRUE)
+
+landscape <-  ggplot(xyz) +
+  geom_tile(aes(x, y, fill = factor(xyz[, 3])))+
+  theme_bw()+
+  coord_equal()+
+  scale_x_continuous(expand = c(0,0))+
+  scale_y_continuous(expand = c(0,0))+
+  theme(panel.grid = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank())+
+  theme_nlm_nis(legend_labels = legend_labels, ratio = ratio)+
+  scale_fill_manual(values = c('#d65e00', "#009E73", '#F0E442',"#CC79A7",'lightblue', "dodgerblue4"))+ 
+  
+  guides(fill=guide_legend(title="Landscape"))
+
+
+landscape   
+```
+
+
+
+```{r}
+png(here("figures","Theoretical_landscape.png"), width = 10, height = 8, units = "in", res = 300)
+
+landscape
+
+dev.off()
+```
+
+
+```{r}
+nrow_xyz<-table(xyz$layer_Categories) %>% 
+  as.data.frame(row.names = NULL) %>% 
+  mutate(Var1 = ifelse(Var1 == "Beef", "Bovine Meat (Beef Herd)", 
+                       ifelse(Var1 == "Salmon aquaculture", "Fish (farmed)", 
+                              ifelse(Var1 == "Maize","Maize (Meal)",
+                                     ifelse(Var1 == "Forest", "Forest", 
+                                            ifelse( Var1 == "Water", "Water", "Smallpelagic"))))))
+
+```
+
+# Plot function
+
+```{r}
+total_stress_plots<-function(dat, title){
+  
+    q<-as.numeric(quantile(dat$final_stressor/1000, na.rm = T)) 
+    
+    dat %>% 
+    ggplot() + # Need to make another color scale for the stressors 
+    geom_raster(aes(x, y, fill = final_stressor/1000)) +
+    #scale_colour_continuous(type = "viridis", direction = -1) +
+    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = title)+
+    #scale_fill_gradient
+    scale_fill_viridis(option = "cividis",direction = -1) +
+    geom_tile(data = dat[dat$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = dat[dat$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') 
+}
+```
+
+# All pressures
+
+```{r}
+all_stress<-read.csv(here("outputs","All_on_farm_stressors.csv")) %>% 
+      dplyr::select(x,y, layer_Categories, final_stressor, stressor)
+```
+
+
+# Figure 2
+
+The following plots were combined manually in powerpoint to produce Figure 2 in the manuscript
+
+
+```{r}
+
+# Corn
+
+corn_ghg_plot <-  ghg %>% 
+    filter(layer_Categories == "Corn") %>% 
+    ggplot() +
+    geom_tile(aes(x, y, fill = final_stressor/1000)) +
+    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = "GHG emissions",
+              strip.background = "transparent")+
+    scale_fill_gradient(low = "#F0E442",
+                      high = "tan4", limits = c(0,250)) +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = ghg[ghg$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Beef',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Salmon aquaculture',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'transparent') 
+
+
+corn_ghg_plot
+```
+
+```{r}
+png(here("figures","Corn_GHG_emissions.png"), width = 10, height = 8, units = "in", res = 300, bg = "transparent")
+
+corn_ghg_plot
+
+dev.off()
+```
+
+```{r}
+log_corn_ghg_plot <-  ghg %>% 
+    filter(layer_Categories == "Corn") %>% 
+    ggplot() + 
+    geom_tile(aes(x, y, fill = final_stressor_log)) +
+    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = "GHG emissions",
+              strip.background = "transparent")+
+    scale_fill_gradient(low = "#F0E442",
+                      high = "#8a6c0b", limits = c(0,5.5)) +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = ghg[ghg$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Beef',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Salmon aquaculture',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'transparent') 
+
+
+log_corn_ghg_plot
+```
+
+```{r}
+png(here("figures","Corn_GHG_emissions_log.png"), width = 10, height = 8, units = "in", res = 300, bg = "transparent")
+
+log_corn_ghg_plot
+
+dev.off()
+```
+
+
+```{r}
+# Beef
+
+beef_ghg_plot <-  ghg %>% 
+    filter(layer_Categories == "Beef") %>% 
+    ggplot() + 
+    geom_tile(aes(x, y, fill = final_stressor/1000)) +
+    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = "Beef GHG emissions")+
+    scale_fill_gradient(low = "#D55E00",
+                      high = "gray7",
+                      limits = c(0,250)) + 
+    geom_tile(data = ghg[ghg$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = ghg[ghg$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Corn',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Salmon aquaculture',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'transparent') 
+
+
+beef_ghg_plot
+```
+
+```{r}
+png(here("figures","Beef_GHG_emissions.png"), width = 10, height = 8, units = "in", res = 300, bg = "transparent")
+
+beef_ghg_plot
+
+dev.off()
+```
+
+
+```{r}
+log_beef_ghg_plot <-  ghg %>% 
+    filter(layer_Categories == "Beef") %>% 
+    ggplot() + 
+    geom_tile(aes(x, y, fill = final_stressor_log)) +
+    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = "Beef GHG emissions")+
+    scale_fill_gradient(low = "#ffdabe",
+                      high = "#d65e00",
+                      limits = c(0,5.5)) + 
+    geom_tile(data = ghg[ghg$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = ghg[ghg$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Corn',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Salmon aquaculture',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'transparent') 
+
+
+log_beef_ghg_plot
+```
+
+```{r}
+png(here("figures","Beef_GHG_emissions_log.png"), width = 10, height = 8, units = "in", res = 300, bg = "transparent")
+
+log_beef_ghg_plot
+
+dev.off()
+```
+
+
+```{r}
+# Salmon
+
+salmon_ghg_plot <-  ghg %>% 
+    filter(layer_Categories == "Salmon aquaculture") %>% 
+    ggplot() +  
+    geom_tile(aes(x, y, fill = final_stressor/1000)) +
+    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = "GHG emissions")+
+    scale_fill_gradient(low = "#CC79A7",
+                      high = "darkorchid4",
+                      limits = c(0,250)) +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = ghg[ghg$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Corn',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Beef',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'transparent') 
+
+salmon_ghg_plot
+```
+
+
+```{r}
+png(here("figures","Salmon_GHG_emissions.png"), width = 10, height = 8, units = "in", res = 300, bg = "transparent")
+
+salmon_ghg_plot
+
+dev.off()
+```
+
+
+```{r}
+# Salmon
+
+log_salmon_ghg_plot <-  ghg %>% 
+    filter(layer_Categories == "Salmon aquaculture") %>% 
+    ggplot() + 
+    geom_tile(aes(x, y, fill = final_stressor_log)) +
+    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = "GHG emissions")+
+    scale_fill_gradient(low = "#CC79A7",
+                      high = "darkorchid4",
+                      limits = c(0,5.5)) +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = ghg[ghg$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Corn',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Beef',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'transparent') 
+
+log_salmon_ghg_plot
+```
+
+
+```{r}
+png(here("figures","Salmon_GHG_emissions_log.png"), width = 10, height = 8, units = "in", res = 300, bg = "transparent")
+
+log_salmon_ghg_plot
+
+dev.off()
+```
+
+
+```{r}
+# Fishery
+
+fishery_ghg_plot <-  ghg %>% 
+    filter(layer_Categories == "Small pelagic fishery") %>% 
+    ggplot() + 
+    geom_tile(aes(x, y, fill = final_stressor/1000)) +
+    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = "GHG emissions")+
+    scale_fill_gradient(low = "lightblue",
+                      high = "midnightblue",
+                      limits = c(0,250)) +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = ghg[ghg$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Corn',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Beef',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Salmon aquaculture',],aes(x, y), fill = 'transparent') 
+
+
+fishery_ghg_plot
+```
+
+```{r}
+png(here("figures","Fishery_GHG_emissions.png"), width = 10, height = 8, units = "in", res = 300, bg = "transparent")
+
+fishery_ghg_plot
+
+dev.off()
+```
+
+```{r}
+log_fishery_ghg_plot <-  ghg %>% 
+    filter(layer_Categories == "Small pelagic fishery") %>% 
+    ggplot() + 
+    geom_tile(aes(x, y, fill = final_stressor_log)) +
+    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = "GHG emissions")+
+    scale_fill_gradient(low = "lightblue",
+                      high = "midnightblue",
+                      limits = c(0,5.5)) +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = ghg[ghg$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Corn',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Beef',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Salmon aquaculture',],aes(x, y), fill = 'transparent') 
+
+
+log_fishery_ghg_plot
+```
+
+```{r}
+png(here("figures","Fishery_GHG_emissions_log.png"), width = 10, height = 8, units = "in", res = 300, bg = "transparent")
+
+log_fishery_ghg_plot
+
+dev.off()
+```
+
+# Freshwater
+
+
+```{r}
+  fw<-  all_stress %>%
+    filter(stressor == "FW") %>%
+    mutate(final_stressor_log = log10(final_stressor+1))
+
+    fw_plot <- total_stress_plots(fw, "FW")+ geom_tile(data = ghg[ghg$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'grey') 
+  
+
+    fw_plot 
+```
+
+
+```{r}
+
+# Corn
+
+corn_fw_plot <-  fw %>% 
+    filter(layer_Categories == "Corn") %>% 
+    ggplot() + 
+    geom_tile(aes(x, y, fill = final_stressor/100000000)) +
+    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = "Corn_FW",
+              strip.background = "transparent")+
+      scale_fill_gradient(low = "#F0E442",
+                      high = "tan4",
+                      limits = c(0,54286406)) +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = ghg[ghg$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Beef',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Salmon aquaculture',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'grey') 
+    
+
+
+corn_fw_plot
+```
+
+```{r}
+png(here("figures","Corn_FW.png"), width = 10, height = 8, units = "in", res = 300, bg = "transparent")
+
+corn_fw_plot
+
+dev.off()
+```
+
+```{r}
+
+# Corn
+
+log_corn_fw_plot <-  fw %>% 
+    filter(layer_Categories == "Corn") %>% 
+    ggplot() +
+    geom_tile(aes(x, y, fill = final_stressor_log)) +
+    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = "Corn_FW",
+              strip.background = "transparent")+
+      scale_fill_gradient(low = "#F0E442",
+                      high = "#8a6c0b",
+                      limits = c(0,16.1)) +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = ghg[ghg$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Beef',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Salmon aquaculture',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'grey') 
+    
+
+
+log_corn_fw_plot
+```
+
+```{r}
+png(here("figures","Corn_FW_log.png"), width = 10, height = 8, units = "in", res = 300, bg = "transparent")
+
+log_corn_fw_plot
+
+dev.off()
+```
+
+
+```{r}
+# Beef
+
+beef_fw_plot <-  fw %>% 
+    filter(layer_Categories == "Beef") %>% 
+    ggplot() + 
+    geom_tile(aes(x, y, fill =final_stressor/100000000)) +
+    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = "Beef FW")+
+   scale_fill_gradient(low = "#D55E00",
+                      high = "gray7",
+                      limits = c(0,54286406)) +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = ghg[ghg$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Corn',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Salmon aquaculture',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'grey') 
+
+
+beef_fw_plot
+```
+
+```{r}
+# Beef
+
+log_beef_fw_plot <-  fw %>% 
+    filter(layer_Categories == "Beef") %>% 
+    ggplot() + 
+    geom_tile(aes(x, y, fill =final_stressor_log)) +
+    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = "Beef FW")+
+   scale_fill_gradient(low = "#ffdabe",
+                      high = "#d65e00",
+                      limits = c(0, 16.1)) +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = ghg[ghg$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Corn',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Salmon aquaculture',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'grey') 
+
+
+log_beef_fw_plot
+```
+
+
+```{r}
+png(here("figures","Beef_FW_log.png"), width = 10, height = 8, units = "in", res = 300, bg = "transparent")
+
+log_beef_fw_plot
+
+dev.off()
+```
+
+```{r}
+# Salmon
+
+salmon_fw_plot <-  fw %>% 
+    filter(layer_Categories == "Salmon aquaculture") %>% 
+    ggplot() + 
+    geom_tile(aes(x, y, fill = final_stressor/100000000)) +
+    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = "FW")+
+     scale_fill_gradient(low = "#CC79A7",
+                      high = "darkorchid4",
+                      limits = c(0,54286406)) +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = ghg[ghg$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Corn',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Beef',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'grey')
+
+  
+salmon_fw_plot
+```
+
+```{r}
+png(here("figures", "Salmon_FW.png"), width = 10, height = 8, units = "in", res = 300, bg = "transparent")
+
+salmon_fw_plot
+
+dev.off()
+```
+
+```{r}
+# Salmon
+
+log_salmon_fw_plot <-  fw %>% 
+    filter(layer_Categories == "Salmon aquaculture") %>% 
+    ggplot() +
+    geom_tile(aes(x, y, fill = final_stressor_log)) +
+    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = "FW")+
+     scale_fill_gradient(low = "#CC79A7",
+                      high = "darkorchid4",
+                      limits = c(0, 16.1)) +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = ghg[ghg$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Corn',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Beef',],aes(x, y), fill = 'transparent') +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'grey')
+
+  
+log_salmon_fw_plot
+```
+
+```{r}
+png(here("figures", "Salmon_FW_log.png"), width = 10, height = 8, units = "in", res = 300, bg = "transparent")
+
+log_salmon_fw_plot
+
+dev.off()
+```
+
+# Land use all production types
+
+
+```{r}
+
+lu<-  all_stress %>%
+    filter(stressor == "Land_Use")
+
+    lu_plot <-  lu %>% 
+    ggplot() + 
+    geom_raster(aes(x, y, fill = final_stressor)) +
+    scale_colour_continuous(type = "viridis") +
+    theme_nlm(legend_labels = legend_labels, ratio = ratio, legend_title = "Area occupancy")+
+    geom_tile(data = xyz[xyz$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = xyz[xyz$layer_Categories == 'Forest',],aes(x, y), fill = 'grey')
+  
+    lu_plot
+```
+
+```{r}
+sub_lu<-  lu %>% 
+  mutate(layer_Categories = ifelse(layer_Categories == "Corn", "Maize", as.character(layer_Categories)))
+    
+lu_cat_plot <-  sub_lu %>% 
+    ggplot() + 
+    geom_tile(aes(x, y, fill = factor(test[, 3]))) + theme_bw()+
+  theme_nlm_nis(legend_labels = legend_labels, ratio = ratio)+
+  scale_fill_manual(values = c('#d65e00', "grey", '#F0E442',"#CC79A7",'lightblue', "grey"))+ 
+  guides(fill=guide_legend(title="Land use")) +
+    geom_tile(data = xyz[xyz$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = xyz[xyz$layer_Categories == 'Forest',],aes(x, y), fill = 'grey')
+  
+    lu_cat_plot
+```
+
+```{r}
+png(here("figures", "Land_use_categories.png"), width = 10, height = 8, units = "in", res = 300, bg = "transparent")
+
+lu_cat_plot
+
+dev.off()
+```
+
+# Rescaled
+
+```{r}
+df_rescale<-read.csv(here("outputs", "All_on_farm_stressors_rescaled.csv"))
+```
+
+```{r}
+ghg_rescale<-xyz
+
+sub_ghg_rescale<-df_rescale %>% 
+      filter(stressor == "GHG")
+    
+    ghg_rescale_plot <-  sub_ghg_rescale %>% 
+    ggplot() + 
+    geom_tile(aes(x, y, fill = rescale)) +
+    theme_nlm(legend_labels = legend_labels, ratio = ratio)+
+    scale_fill_viridis(option = "cividis",direction = -1) +
+    geom_tile(data = ghg[ghg$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = ghg[ghg$layer_Categories == 'Forest',],aes(x, y), fill = 'grey')
+  
+   ghg_rescale_plot
+```
+
+
+```{r}
+
+sub_lu_rescale<-df_rescale %>% 
+      filter(stressor == "Land_Use")
+    
+    lu_rescale_plot <-  sub_lu_rescale %>% 
+    ggplot() + # Need to make another color scale for the stressors 
+    geom_tile(aes(x, y, fill = rescale)) +
+    theme_nlm(legend_labels = legend_labels, ratio = ratio)+
+    scale_fill_viridis(option = "cividis",direction = -1) +
+    geom_tile(data = lu[lu$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = lu[lu$layer_Categories == 'Forest',],aes(x, y), fill = 'grey')
+
+  
+    lu_rescale_plot
+```
+
+
+```{r}
+sub_fw_rescale<-df_rescale %>% 
+      filter(stressor == "FW") 
+    
+    
+    fw_rescale_plot <-  sub_fw_rescale %>% 
+    ggplot() +
+    geom_tile(aes(x, y, fill = rescale)) +
+    theme_nlm(legend_labels = legend_labels, ratio = ratio)+
+    scale_fill_viridis(option = "cividis",direction = -1) +
+    geom_tile(data = xyz[xyz$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
+    geom_tile(data = xyz[xyz$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') +
+    geom_tile(data = xyz[xyz$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'grey')
+
+  
+   fw_rescale_plot
+```
+
+## Figure 3 plots
+
+# Figure 3A
+
+# Cumulative
+
+```{r}
+cum_stress<-read.csv(here("outputs", "Cumulative_stressors.csv"))
+```
+
+```{r}
+plot_c <-  cum_stress %>% 
+  ggplot() + 
+  geom_tile(aes(x, y, fill = cum_stress))+
+  theme_bw()+
+  scale_fill_viridis(option = "B",direction = -1, breaks=c(0, 0.5, 1,1.5,2)) +
+  theme(legend.title = element_blank(),
+        panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank())+
+  coord_equal()+
+  scale_x_continuous(expand = c(0,0))+
+  scale_y_continuous(expand = c(0,0))+
+  geom_tile(data = cum_stress[cum_stress$layer_Categories == 'Water',],aes(x, y), fill = 'white')+
+  geom_tile(data = cum_stress[cum_stress$layer_Categories == 'Forest',],aes(x, y), fill = 'white')#+
+
+
+plot_c
+
+
+max(cum_stress$cum_stress)
+```
+
+```{r}
+png(here("figures", "Cumulative_pressure.png"), width = 10, height = 8, units = "in", res = 300)
+
+plot_c
+
+dev.off()
+```
+
+# Figure 3B
+
+# Plot pressure per unit production
+
+```{r}
+cost_dat<-read.csv(here("outputs", "Cumulative_cost.csv"))
+
+```
+
+
+```{r}
+plot_cost <-  cost_dat %>% 
+  ggplot() + 
+  geom_raster(aes(x, y, fill = cum_cost)) +
+  theme_bw()+
+  coord_equal()+
+  scale_x_continuous(expand = c(0,0))+
+  scale_y_continuous(expand = c(0,0))+
+  scale_fill_viridis(option = "B",direction = -1, breaks=c(0, 0.25, 0.5,0.75,1)) +
+  theme(legend.title = element_blank(),
+        panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank())+
+  geom_tile(data = cost_dat[cost_dat$layer_Categories == 'Water',],aes(x, y), fill = 'white')+
+  geom_tile(data = cost_dat[cost_dat$layer_Categories == 'Forest',],aes(x, y), fill = 'white')#+
+
+
+plot_cost
+```
+
+```{r}
+png(here("figures", "Cumulative_cost.png"), width = 10, height = 8, units = "in", res = 300)
+
+plot_cost
+
+dev.off()
+
+```
+
+
+#Combined Figure 3 plot
+```{r}
+ggarrange(plot_c, plot_cost,
+          labels= c("a.", "b."),
+          nrow=1, ncol=2,
+          label.y = 1,
+          font.label = list(size=12))+
+  ggsave(here("figures", "Cumulative_cost_combined.png"), device = "png", width = 10, dpi=300, height = 4.5, units = "in" )+
+  ggsave(here("figures", "Cumulative_cost_combined.pdf"), device = "pdf", width = 10, dpi=300, height = 4.5, units = "in" )
+
+```
+
+# Box 2 plot
+
+# Beef on-off GHG emissions
+
+```{r}
+ghg_on_off<-read.csv(here("outputs",'Beef_salmon_GHG_emissions_footprint.csv'))
+
+```
+
+
+```{r}
+cow <- readPNG(here("figures", "cow_small.png"))
+cow <- rasterGrob(cow)
+
+salmon <- readPNG(here("figures", "salmon.png"))
+salmon <- rasterGrob(salmon)
+```
+
+
+```{r}
+beef_agg_stress<-ghg_on_off %>% 
+  filter(layer_Categories == "Beef") %>% 
+  ggplot() +
+  geom_tile(aes(x, y, fill = agg_stress/1000)) +
+  theme_bw()+
+  coord_equal()+
+  scale_x_continuous(expand = c(0,0))+
+  scale_y_continuous(expand = c(0,0))+
+  scale_fill_viridis(option = "B",direction = -1, limits = c(0,115)) +
+  theme(panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank())+
+  labs(fill= "")+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Water',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Forest',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Salmon aquaculture',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'white') +
+  geom_tile(data = xyz[xyz$layer_Categories == 'Corn',],aes(x, y), fill = 'white')+
+  annotation_custom(cow, xmin = 17000, xmax = 20000, ymin = 18000, ymax=20000)
+  
+ 
+
+beef_agg_stress
+```
+
+```{r}
+png(here("figures", "Beef_ghg_combined.png"), width = 10, height = 8, units = "in", res = 300)
+
+beef_agg_stress
+
+dev.off()
+```
+
+```{r}
+beef_disagg<-ghg_on_off %>% 
+  ggplot() +
+  geom_tile(aes(x, y, fill = beef_disagg_stress/1000)) +
+  theme_bw()+
+  coord_equal()+
+  scale_x_continuous(expand = c(0,0))+
+  scale_y_continuous(expand = c(0,0))+
+  scale_fill_viridis(option = "B",direction = -1, limits = c(0,115)) +
+  theme(panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank())+
+  labs(fill= "")+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Water',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Forest',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Salmon aquaculture',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'white')+
+  annotation_custom(cow, xmin = 17000, xmax = 20000, ymin = 18000, ymax=20000)#+
+
+beef_disagg
+```
+
+```{r}
+png(here("figures", "Beef_ghg_separated.png"), width = 10, height = 8, units = "in", res = 300)
+
+beef_disagg
+
+dev.off()
+```
+# Salmon GHG emissions
+
+
+```{r}
+salmon_agg<-ghg_on_off %>% 
+  filter(layer_Categories == "Salmon aquaculture") %>% 
+  ggplot() +
+  geom_tile(aes(x, y, fill = agg_stress/1000)) +
+ theme_bw()+
+  coord_equal()+
+  scale_x_continuous(expand = c(0,0))+
+  scale_y_continuous(expand = c(0,0))+
+  scale_fill_viridis(option = "B",direction = -1, limits = c(0,115)) +
+  theme(panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank())+
+  labs(fill= "")+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Water',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Forest',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Beef',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'white') +
+  geom_tile(data = xyz[xyz$layer_Categories == 'Corn',],aes(x, y), fill = 'white')+
+  annotation_custom(salmon, xmin = 16000, xmax = 20000, ymin = 00, ymax=2000)#+
+
+salmon_agg
+
+
+```
+
+```{r}
+png(here("figures", "Salmon_ghg_combined.png"), width = 10, height = 8, units = "in", res = 300)
+
+salmon_agg
+
+dev.off()
+```
+
+```{r}
+salmon_disagg<-ghg_on_off %>% 
+  ggplot() +
+  geom_raster(aes(x, y, fill = salmon_disagg_stress/1000)) +
+  theme_bw()+
+  coord_equal()+
+  scale_x_continuous(expand = c(0,0))+
+  scale_y_continuous(expand = c(0,0))+
+  scale_fill_viridis(option = "B",direction = -1, limits = c(0,115)) +
+  theme(panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_rect(fill="transparent"))+
+  labs(fill= "")+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Water',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Forest',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Beef',],aes(x, y), fill = 'white')+
+  annotation_custom(salmon, xmin = 16000, xmax = 20000, ymin = 00, ymax=2000)
+
+salmon_disagg
+
+max(ghg_on_off$salmon_disagg_stress[!is.na(ghg_on_off$agg_stress)])
+```
+
+```{r}
+png(here("figures", "Salmon_ghg_separated.png"), width = 10, height = 8, units = "in", res = 300)
+
+salmon_disagg
+
+dev.off()
+```
+
+
+# Yield/Production data
+
+Yield needs to be in kg liveweight to match the stressor values
+
+```{r}
+# Maize 9.97 tonnes dry weight/ha
+# Beef 12.185 kg protein/ha = 70.3 kg liveweight/ha
+# Need to figure out salmon and pelagic fishery
+
+yield<-data.frame(Category = c("Maize (Meal)", "Bovine Meat (Beef Herd)", "Fish (farmed)", "Smallpelagic"), High_kg_ha = c(12000, 50, 20000, 8000)) %>% 
+  mutate(Low_kg_ha = High_kg_ha/3)%>% 
+  left_join(nrow_xyz, by = c("Category" = "Var1"))
+
+yield$SD <- (yield$High_kg_ha-yield$Low_kg_ha)/3.92 # Assume the highs and lows are 95 and 5th quantiles 
+yield$ymean <- rowMeans(cbind(yield$Low_kg_ha,yield$High_kg_ha))
+
+
+```
+
+
+```{r}
+yield
+
+yield<- yield %>% 
+  group_by(Category) %>% 
+  mutate(yield_samples = rnorm(Freq, mean = ymean, sd = SD) %>% list) %>% 
+  unnest(yield_samples) #%>% 
+
+# Assign the minimum value to negative values
+idx <- which(yield$yield_samples < 0)
+
+yield$yield_samples[idx] <- yield$Low_kg_ha[idx]
+
+# Assume the mean and that the edges are the 95% confidence intervals 
+
+
+```
+
+```{r}
+yield_plot<-xyz 
+
+yield_plot$prod[yield_plot$layer_Categories == "Beef"]<-yield$yield_samples[yield$Category == "Bovine Meat (Beef Herd)"]
+yield_plot$prod[yield_plot$layer_Categories == "Maize"]<-yield$yield_samples[yield$Category == "Maize (Meal)"]
+yield_plot$prod[yield_plot$layer_Categories == "Salmon aquaculture"]<-yield$yield_samples[yield$Category == "Fish (farmed)"]
+yield_plot$prod[yield_plot$layer_Categories == "Small pelagic fishery"]<-yield$yield_samples[yield$Category == "Smallpelagic"]
+```
+
+
+```{r}
+yield_fig <-  ggplot(yield_plot) +
+  geom_tile(aes(x, y, fill = prod))+
+  theme_bw()+
+  scale_fill_viridis(option = "B",direction = -1) +
+   theme(legend.title = element_blank(),
+         panel.grid = element_blank(),
+         axis.ticks = element_blank(),
+         axis.text = element_blank(),
+         axis.title = element_blank())+
+  coord_equal()+
+  scale_x_continuous(expand = c(0,0))+
+  scale_y_continuous(expand = c(0,0))+
+  theme(panel.grid = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank())+
+  theme_nlm_nis(legend_labels = legend_labels, ratio = ratio)+
+  labs(fill = "")
+
+yield_fig
+
+```
+
+
+```{r}
+png(here("figures","Landscape_yield.png"), width = 10, height = 8, units = "in", res = 300)
+
+yield_fig
+
+dev.off()
+```
+
+
+# Beef_agg_cost
+
+```{r}
+ghg_on_off_yield<-left_join(ghg_on_off, yield_plot, by = c("x", "y", "layer_Categories")) %>%
+  mutate(agg_cost = agg_stress/yield)
+```
+
+
+```{r}
+beef_agg_cost<-ghg_on_off_yield %>% 
+  filter(layer_Categories == "Beef") %>% 
+  ggplot() +
+  geom_tile(aes(x, y, fill = agg_cost)) +
+  theme_bw()+
+  coord_equal()+
+  scale_x_continuous(expand = c(0,0))+
+  scale_y_continuous(expand = c(0,0))+
+  scale_fill_viridis(option = "B",direction = -1, limits = c(0,450)) +
+  theme(panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank())+
+  labs(fill= "")+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Water',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Forest',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Salmon aquaculture',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'white') +
+  geom_tile(data = xyz[xyz$layer_Categories == 'Corn',],aes(x, y), fill = 'white')+
+  annotation_custom(cow, xmin = 17000, xmax = 20000, ymin = 18000, ymax=20000)
+  
+ 
+
+beef_agg_cost
+```
+# Samlon_agg_cost
+
+```{r}
+
+salmon_agg_cost<-ghg_on_off_yield %>% 
+  filter(layer_Categories == "Salmon aquaculture") %>% 
+  ggplot() +
+  geom_tile(aes(x, y, fill = agg_cost)) +
+ theme_bw()+
+  coord_equal()+
+  scale_x_continuous(expand = c(0,0))+
+  scale_y_continuous(expand = c(0,0))+
+  scale_fill_viridis(option = "B",direction = -1, limits = c(0,450)) +
+  theme(panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank())+
+  labs(fill= "")+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Water',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Forest',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Beef',],aes(x, y), fill = 'white')+
+  geom_tile(data = xyz[xyz$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'white') +
+  geom_tile(data = xyz[xyz$layer_Categories == 'Corn',],aes(x, y), fill = 'white')+
+  annotation_custom(salmon, xmin = 16000, xmax = 20000, ymin = 00, ymax=2000)#+
+
+salmon_agg_cost
+
+```
+
+#combined box 2 plot with costs
+```{r}
+ggarrange(beef_disagg, beef_agg_stress, beef_agg_cost, salmon_disagg, salmon_agg, salmon_agg_cost,
+
+          labels = c("a.", "b.", "c.", "d.", "e.", "f."),
+          font.label = list(size=12),
+          label.y = 1.01,
+          nrow = 3, ncol=3,
+          align = "hv")
+  ggsave(here("figures", "Box_2_figures_combined.png"), width = 14, height = 10, units = "in", dpi=300)
+ 
+
+```
+
+
+

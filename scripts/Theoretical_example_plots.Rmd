@@ -109,24 +109,6 @@ nrow_xyz<-table(xyz$layer_Categories) %>%
 
 ```
 
-# Plot function
-
-```{r}
-total_stress_plots<-function(dat, title){
-  
-    q<-as.numeric(quantile(dat$final_stressor/1000, na.rm = T)) 
-    
-    dat %>% 
-    ggplot() + # Need to make another color scale for the stressors 
-    geom_raster(aes(x, y, fill = final_stressor/1000)) +
-    #scale_colour_continuous(type = "viridis", direction = -1) +
-    theme_nlm(legend_labels = legend_labels,ratio = ratio, legend_title = title)+
-    #scale_fill_gradient
-    scale_fill_viridis(option = "cividis",direction = -1) +
-    geom_tile(data = dat[dat$layer_Categories == 'Water',],aes(x, y), fill = 'grey')+
-    geom_tile(data = dat[dat$layer_Categories == 'Forest',],aes(x, y), fill = 'grey') 
-}
-```
 
 # All pressures
 
@@ -140,6 +122,11 @@ all_stress<-read.csv(here("outputs","All_on_farm_stressors.csv")) %>%
 
 The following plots were combined manually in powerpoint to produce Figure 2 in the manuscript
 
+```{r}
+ ghg<-  all_stress %>%
+    filter(stressor == "GHG") %>%
+    mutate(final_stressor_log = log10(final_stressor+1))
+```
 
 ```{r}
 

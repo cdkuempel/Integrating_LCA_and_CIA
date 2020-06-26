@@ -367,11 +367,6 @@ dev.off()
   fw<-  all_stress %>%
     filter(stressor == "FW") %>%
     mutate(final_stressor_log = log10(final_stressor+1))
-
-    fw_plot <- total_stress_plots(fw, "FW")+ geom_tile(data = ghg[ghg$layer_Categories == 'Small pelagic fishery',],aes(x, y), fill = 'grey') 
-  
-
-    fw_plot 
 ```
 
 
@@ -574,7 +569,7 @@ sub_lu<-  lu %>%
     
 lu_cat_plot <-  sub_lu %>% 
     ggplot() + 
-    geom_tile(aes(x, y, fill = factor(test[, 3]))) + theme_bw()+
+    geom_tile(aes(x, y, fill = factor(sub_lu[, 3]))) + theme_bw()+
   theme_nlm_nis(legend_labels = legend_labels, ratio = ratio)+
   scale_fill_manual(values = c('#d65e00', "grey", '#F0E442',"#CC79A7",'lightblue', "grey"))+ 
   guides(fill=guide_legend(title="Land use")) +
